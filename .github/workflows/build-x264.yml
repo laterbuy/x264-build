@@ -11,24 +11,28 @@ jobs:
     runs-on: windows-latest
 
     steps:
-    - name: Checkout code
+    - name: Checkout repository
       uses: actions/checkout@v3
 
-    - name: Download x264 source
+    - name: Download x264 source snapshot
+      shell: powershell
       run: |
-        curl -LO http://download.videolan.org/pub/x264/snapshots/x264-snapshot-20230529-2245.tar.bz2
-        tar -xjf x264-snapshot-20230529-2245.tar.bz2
-        ren x264-snapshot-20230529-2245 x264
+        $version = "20250520-2245"  # 这里改成你需要的快照日期
+        $url = "http://download.videolan.org/pub/x264/snapshots/x264-snapshot-$version.tar.bz2"
+        Write-Host "Downloading x264 snapshot $version ..."
+        Invoke-WebRequest -Uri $url -OutFile "x264-snapshot.tar.bz2"
+
+        Write-Host "Extracting archive..."
+        tar -xjf x264-snapshot.tar.bz2
+        Rename-Item "x264-snapshot-$version" "x264"
 
     - name: Build x264 with MSVC
       shell: cmd
       run: |
-        REM 查找vcvars64.bat路径（根据你用的VS版本调整）
-        set VSWHERE="%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
-        for /f "delims=" %%i in ('%VSWHERE% -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath') do set VS_PATH=%%i
+        REM 查找 VS 安装路径
+        for /f "delims=" %%i in ('"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath') do set VS_PATH=%%i
 
-        echo Found VS installation path: %VS_PATH%
-
+        echo Using VS_PATH=%VS_PATH%
         if not exist "%VS_PATH%\VC\Auxiliary\Build\vcvars64.bat" (
           echo ERROR: vcvars64.bat not found!
           exit /b 1
@@ -37,21 +41,20 @@ jobs:
         call "%VS_PATH%\VC\Auxiliary\Build\vcvars64.bat"
 
         cd x264\build
-
         nmake -f win32\Makefile.msvc clean
         nmake -f win32\Makefile.msvc
 
     - name: Collect artifacts and zip
       shell: powershell
       run: |
-        $outdir = "$(System.DefaultWorkingDirectory)\artifacts"
-        New-Item -ItemType Directory -Force -Path $outdir
+        $outdir = "$env:GITHUB_WORKSPACE\artifacts"
+        if (-Not (Test-Path $outdir)) { New-Item -ItemType Directory -Path $outdir | Out-Null }
 
-        Copy-Item -Path "x264\build\include\x264.h" -Destination $outdir
-        Copy-Item -Path "x264\build\lib\x264.lib" -Destination $outdir
-        Copy-Item -Path "x264\build\bin\x264.dll" -Destination $outdir
+        Copy-Item -Path "$env:GITHUB_WORKSPACE\x264\build\include\x264.h" -Destination $outdir
+        Copy-Item -Path "$env:GITHUB_WORKSPACE\x264\build\lib\x264.lib" -Destination $outdir
+        Copy-Item -Path "$env:GITHUB_WORKSPACE\x264\build\bin\x264.dll" -Destination $outdir
 
-        $zipPath = "$(System.DefaultWorkingDirectory)\x264-msvc-win.zip"
+        $zipPath = "$env:GITHUB_WORKSPACE\x264-msvc-win.zip"
         if (Test-Path $zipPath) { Remove-Item $zipPath }
         Compress-Archive -Path "$outdir\*" -DestinationPath $zipPath
 
@@ -60,7 +63,6 @@ jobs:
       run: |
         git config user.name "github-actions"
         git config user.email "actions@github.com"
-
         if git rev-parse v1.0.0 >/dev/null 2>&1; then
           echo "Tag v1.0.0 already exists"
         else
