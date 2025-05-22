@@ -1,0 +1,96 @@
+name: Build x264 with MSVC on Windows
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-x264-msvc:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v3
+
+    - name: Setup MSVC environment
+      shell: powershell
+      run: |
+        # 初始化 MSVC 环境
+        $vcvars = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+        if (-Not (Test-Path $vcvars)) {
+          $vcvars = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
+        }
+        Write-Host "Using vcvars: $vcvars"
+        cmd /c `"$vcvars && set`" > env.txt
+        Get-Content env.txt | ForEach-Object {
+          $parts = $_ -split '='
+          if ($parts.Length -eq 2) {
+            [System.Environment]::SetEnvironmentVariable($parts[0], $parts[1])
+          }
+        }
+
+    - name: Download x264 source
+      run: |
+        curl -LO http://download.videolan.org/pub/x264/snapshots/x264-snapshot-20230529-2245.tar.bz2
+        tar -xjf x264-snapshot-20230529-2245.tar.bz2
+        rename-item "x264-snapshot-20230529-2245" "x264"
+
+    - name: Build x264 with MSVC
+      shell: cmd
+      run: |
+        cd x264\build
+        REM 先清理，避免残留
+        nmake -f win32\Makefile.msvc clean
+
+        REM 生成项目文件和编译（可自定义参数）
+        nmake -f win32\Makefile.msvc
+
+    - name: Collect files and package zip
+      shell: powershell
+      run: |
+        $outdir = "$(System.DefaultWorkingDirectory)\artifacts"
+        New-Item -ItemType Directory -Force -Path $outdir
+
+        # 复制头文件
+        Copy-Item -Path "x264\build\include\x264.h" -Destination $outdir
+
+        # 复制 lib 文件
+        Copy-Item -Path "x264\build\lib\x264.lib" -Destination $outdir
+
+        # 复制 dll 文件
+        Copy-Item -Path "x264\build\bin\x264.dll" -Destination $outdir
+
+        # 打包 zip
+        $zipPath = "$(System.DefaultWorkingDirectory)\x264-msvc-win.zip"
+        if (Test-Path $zipPath) { Remove-Item $zipPath }
+        Compress-Archive -Path "$outdir\*" -DestinationPath $zipPath
+
+    - name: Create git tag
+      id: tag
+      run: |
+        TAG=v1.0.0
+        git config user.name "github-actions"
+        git config user.email "actions@github.com"
+        git tag -a $TAG -m "Build x264 MSVC $TAG"
+        git push origin $TAG
+
+    - name: Create GitHub Release
+      id: create_release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v1.0.0
+        name: x264 MSVC Windows v1.0.0
+        body: x264 build compiled with MSVC on Windows.
+
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Upload Release asset
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v1.0.0
+        files: x264-msvc-win.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
